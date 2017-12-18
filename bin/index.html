@@ -1,0 +1,281 @@
+<!doctype html>
+<html>
+  <head>
+    <title>Achtung Die Kurve!</title>
+    <meta charset="utf-8" />
+    <script>
+      var Helpers = {
+          isObjectValue: function (obj, prop) {
+              return Object.keys(obj).map(function (key) {
+                  return obj[key]
+              }).indexOf(prop) !== -1
+          }
+      }
+
+
+
+      var leftDown, rightDown,
+
+      config = {
+        width: 1000,
+        height: 600,
+        strokeSize: 5,
+        host: "192.168.80.109",
+        port: 8881
+      }
+
+      var init = function () {
+          console.log("Init game")
+
+          var canvas = document.createElement("canvas")
+          canvas.width = config.width
+          canvas.height = config.height
+
+          var game = new Game(canvas)
+
+          document.getElementsByTagName("body")[0].appendChild(canvas)
+      }
+
+      var Game = function (canvas) {
+          this.animator = new Animator(canvas)
+
+          this.keys = { left: 37, right: 39 }
+
+          document.addEventListener("keydown", this.keyDown.bind(this))
+          document.addEventListener("keyup", this.keyUp.bind(this))
+
+          this.socket = new WebSocket("ws://"+ (config.host || "localhost")+":"+config.port+"/command")
+          this.socket.onmessage = this.update.bind(this)
+          this.socket.onclose = this.disconnect.bind(this)
+
+          this.events = {
+            init: function(message) {
+              this.animator.clear()
+			  this.animator.clearScore()
+			  var data = message.data
+              if (data.players) {
+                  this.animator.showScoreboard(data.round, data.players)
+              }
+              this.animator.showText("Waiting for players to connect")
+            },
+            end: function(message) {
+              if (message.data) {
+                  var winner = message.data
+                  this.animator.showText(winner.name + " won", winner.color)
+              } else {
+                  this.animator.clear()
+                  this.exit();
+              }
+            },
+            world: function(message) {
+              this.sendDirection()
+              var data = message.data
+              if (data.players) {
+                  this.animator.drawPlayers(data.players)
+              }
+            },
+            score: function(message) {
+              var data = message.data
+              if (data.players) {
+                  this.animator.showScoreboard(data.round, data.players)
+              }
+            },
+			start: function(message) {
+              this.animator.clear()
+            },
+            newRound: function(message) {
+              this.animator.clear()
+              var data = message.data
+              if (data.players) {
+			      this.animator.drawPlayers(data.players)
+                  this.animator.showScoreboard(data.round, data.players)
+				  this.animator.drawPlayersArrow(data.players)
+              }
+            }
+          }
+      }
+
+      Game.prototype.keyDown = function (evt) {
+          var key = evt.keyCode
+
+          switch (key) {
+          case this.keys.left:
+              leftDown = Date.now();
+              break;
+          case this.keys.right:
+              rightDown = Date.now();
+              break;
+          }
+      }
+
+
+      Game.prototype.keyUp = function (evt) {
+          var key = evt.keyCode
+
+          switch (key) {
+          case this.keys.left:
+              leftDown = null;
+              break;
+          case this.keys.right:
+              rightDown = null;
+              break;
+          }
+      }
+
+      Game.prototype.sendDirection = function () {
+        var dirs = { LEFT: "left", RIGHT: "right" }
+
+        var send = function(dir) {
+          this.socket.send(JSON.stringify({
+              direction: dir
+          }))
+        }.bind(this)
+
+        if (leftDown && rightDown) {
+          var keyPressed = dirs.LEFT
+
+          if (leftDown < rightDown) {
+              keyPressed = dirs.RIGHT
+          }
+
+          send(keyPressed)
+
+        } else if (leftDown) {
+          send(dirs.LEFT)
+        } else if (rightDown) {
+          send(dirs.RIGHT)
+        }
+      }
+
+      Game.prototype.disconnect = function (evt) {
+          console.log("Server disconnected")
+          this.animator.showText("Server disconnected")
+      }
+
+      Game.prototype.update = function (evt) {
+          var message = JSON.parse(evt.data)
+          if(Object.keys(this.events).indexOf(message.event) !== -1) {
+            this.events[message.event].call(this, message)
+          }
+      }
+
+      Game.prototype.exit = function (evt) {
+          console.log("Game over")
+          this.animator.showText("Exit. Restarting in 3 seconds")
+      }
+
+
+      var Animator = function (canvas) {
+          this.canvas = canvas
+          this.ctx = canvas.getContext("2d")
+          this.bounds = {
+              width: canvas.width,
+              height: canvas.height
+          }
+      }
+
+      Animator.prototype.drawPlayers = function (players) {
+          players.forEach(this.drawPlayer.bind(this))
+      }
+
+      Animator.prototype.showText = function (text, color) {
+        //this.clear()
+
+		    if(color){
+			    this.ctx.fillStyle = color
+		    } else {
+			    this.ctx.fillStyle = "white"
+		    }
+        this.ctx.font = "bold 24px Arial"
+        this.ctx.fillText(text, (this.bounds.width - 300) / 2, this.bounds.height / 2)
+      }
+
+      Animator.prototype.clear = function () {
+          this.ctx.clearRect(0, 0, this.bounds.width-200, this.bounds.height)
+      }
+
+	  Animator.prototype.clearScore = function () {
+          this.ctx.fillStyle = "#202020"
+          this.ctx.fillRect(this.bounds.width-200, 0, this.bounds.height, this.bounds.width)
+      }
+
+      Animator.prototype.showScoreboard = function (round, players) {
+		  this.clearScore()
+          this.ctx.font = "bold 24px Arial"
+		  this.ctx.fillStyle = "white"
+          this.ctx.fillText("Round: "+round,this.bounds.width-180, 60)
+		  this.ctx.font = "bold 16px Arial"
+          players.forEach(function (player, index) {
+			  this.ctx.fillStyle = player.color
+              this.ctx.fillText(player.name + ": "+player.points,this.bounds.width-180, index*40+200)
+          }.bind(this))
+      }
+
+      Animator.prototype.drawPlayersArrow = function (players) {
+		players.forEach(function (player, index) {
+			this.ctx.strokeStyle = player.color
+			this.ctx.beginPath()
+			var angle = player.direction * (Math.PI / 180)
+			var tox = player.head.x + (Math.cos(angle) *30)
+			var toy = player.head.y + (Math.sin(angle) *30)
+			this.drawPlayerArrow(this.ctx, player.head.x,player.head.y, tox, toy)
+			this.ctx.closePath()
+			this.ctx.stroke()
+        }.bind(this))
+	  }
+
+	  Animator.prototype.drawPlayerArrow = function(context, fromx, fromy, tox, toy){
+		var headlen = 10;	// length of head in pixels
+		var dx = tox-fromx;
+		var dy = toy-fromy;
+		var angle = Math.atan2(dy,dx);
+		context.moveTo(fromx, fromy);
+		context.lineTo(tox, toy);
+		context.lineTo(tox-headlen*Math.cos(angle-Math.PI/6),toy-headlen*Math.sin(angle-Math.PI/6));
+		context.moveTo(tox, toy);
+		context.lineTo(tox-headlen*Math.cos(angle+Math.PI/6),toy-headlen*Math.sin(angle+Math.PI/6));
+	}
+
+      Animator.prototype.drawPlayer = function (data) {
+          if (!data.inRound) return
+
+          var size = config.strokeSize
+
+          this.ctx.fillStyle = data.color
+          this.ctx.beginPath()
+
+          this.ctx.fillRect(data.head.x, data.head.y, size, size)
+
+          if (data.lasthead && !data.lasthead.isVisible) {
+              this.ctx.fillStyle = "#000000"
+              this.ctx.fillRect(data.lasthead.x, data.lasthead.y, size, size)
+          }
+
+          this.ctx.closePath()
+          this.ctx.fill()
+      }
+
+      document.addEventListener("DOMContentLoaded", init)
+    </script>
+    <style>
+		canvas {
+			width:100%;
+			height: 100%;
+			background-color: #000;
+			margin: 0px;
+			padding: 0px;
+		}
+
+		html, body {
+			overflow: hidden;
+			width:  100%;
+			height: 100%;
+			margin: 0px;
+		}
+    </style>
+  </head>
+  <body>
+
+    <!-- By Brook & Bohn -->
+  </body>
+</html>
